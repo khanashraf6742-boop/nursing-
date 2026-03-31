@@ -13,6 +13,7 @@ from agent import (
     generate_flashcards,
     generate_all_flashcards,
     generate_flashcards_slice,
+    generate_flashcards_range,
     _all_flashcards_flat,
     get_mnemonic,
     ccs_rule,
@@ -426,6 +427,132 @@ class TestFlashcardsSlice:
 
     def test_ask_all_flashcards_still_works_when_no_n(self):
         # Regression: "all flashcards" (no number) should still return full dump
+        agent = NursingAgent()
+        result = agent.ask("all flashcards")
+        assert "BCG" in result or "Marasmus" in result
+
+
+# ---------------------------------------------------------------------------
+# Flashcard range tests (cards X to Y)
+# ---------------------------------------------------------------------------
+
+class TestFlashcardsRange:
+    """Tests for generate_flashcards_range() and NursingAgent.flashcards_range()."""
+
+    # ------------------------------------------------------------------
+    # generate_flashcards_range
+    # ------------------------------------------------------------------
+
+    def test_range_61_100_returns_40_cards(self):
+        result = generate_flashcards_range(61, 100)
+        card_lines = [l for l in result.splitlines() if " | " in l]
+        assert len(card_lines) == 40
+
+    def test_range_61_100_header(self):
+        total = len(_all_flashcards_flat())
+        result = generate_flashcards_range(61, 100)
+        assert "Flashcards 61–100" in result
+        assert str(total) in result
+
+    def test_range_cards_are_numbered_correctly(self):
+        result = generate_flashcards_range(61, 100)
+        assert " 61." in result
+        assert "100." in result
+        # Card 60 must NOT be present
+        assert " 60." not in result
+
+    def test_range_61_100_contains_growth_development_cards(self):
+        # Cards 57–74 are paediatrics growth & development
+        # Card 61 = "Average birth length" (5th card in that sub-topic)
+        result = generate_flashcards_range(61, 100)
+        assert "birth length" in result.lower() or "Birth length" in result
+
+    def test_range_61_100_contains_immunisation_cards(self):
+        # Cards 75–94 are paediatrics immunisation
+        result = generate_flashcards_range(61, 100)
+        assert "BCG" in result
+
+    def test_range_61_100_contains_common_conditions_cards(self):
+        # Cards 95–112 are paediatrics common conditions; first 6 fall in 95–100
+        result = generate_flashcards_range(61, 100)
+        assert "Febrile seizure" in result or "febrile" in result.lower()
+
+    def test_range_single_card(self):
+        result = generate_flashcards_range(1, 1)
+        card_lines = [l for l in result.splitlines() if " | " in l]
+        assert len(card_lines) == 1
+        assert "Normal serum Na" in result
+
+    def test_range_clamped_when_end_exceeds_total(self):
+        total = len(_all_flashcards_flat())
+        result = generate_flashcards_range(total - 2, total + 999)
+        card_lines = [l for l in result.splitlines() if " | " in l]
+        assert len(card_lines) == 3  # total - 2, total - 1, total
+
+    def test_range_clamped_when_start_exceeds_total(self):
+        total = len(_all_flashcards_flat())
+        result = generate_flashcards_range(total + 50, total + 100)
+        # start and end both clamp to total → single card
+        card_lines = [l for l in result.splitlines() if " | " in l]
+        assert len(card_lines) == 1
+
+    def test_range_start_1_end_20_matches_slice_20(self):
+        slice_result = generate_flashcards_slice(20)
+        range_result = generate_flashcards_range(1, 20)
+        # Both should contain the same 20 card lines
+        slice_cards = [l for l in slice_result.splitlines() if " | " in l]
+        range_cards = [l for l in range_result.splitlines() if " | " in l]
+        assert slice_cards == range_cards
+
+    def test_range_returns_string(self):
+        assert isinstance(generate_flashcards_range(61, 100), str)
+
+    # ------------------------------------------------------------------
+    # NursingAgent.flashcards_range
+    # ------------------------------------------------------------------
+
+    def test_agent_flashcards_range_method(self):
+        agent = NursingAgent()
+        result = agent.flashcards_range(61, 100)
+        assert "Flashcards 61–100" in result
+        assert "|" in result
+        card_lines = [l for l in result.splitlines() if " | " in l]
+        assert len(card_lines) == 40
+
+    # ------------------------------------------------------------------
+    # ask() routing — "cards X to Y" patterns
+    # ------------------------------------------------------------------
+
+    def test_ask_cards_61_to_100(self):
+        agent = NursingAgent()
+        result = agent.ask("provide flashcards from card number 61 to card number 100")
+        assert "Flashcards 61–100" in result
+        card_lines = [l for l in result.splitlines() if " | " in l]
+        assert len(card_lines) == 40
+
+    def test_ask_range_variations(self):
+        agent = NursingAgent()
+        for phrase in (
+            "cards 61 to 100",
+            "cards 61-100",
+            "flashcards 61 to 100",
+            "give me cards 61 to 100",
+            "show flashcards 61 to 100",
+        ):
+            result = agent.ask(phrase)
+            assert "|" in result, f"ask('{phrase}') did not return cards"
+            assert "61" in result, f"ask('{phrase}') missing start card number"
+
+    def test_ask_range_does_not_break_first_n_routing(self):
+        # "first 20 flashcards" should still use generate_flashcards_slice
+        agent = NursingAgent()
+        result = agent.ask("first 20 flashcards")
+        assert "First 20 Flashcards" in result
+        card_lines = [l for l in result.splitlines() if " | " in l]
+        assert len(card_lines) == 20
+
+    def test_ask_range_does_not_break_all_flashcards_routing(self):
+        # "all flashcards" (no numbers) should still return full dump
         agent = NursingAgent()
         result = agent.ask("all flashcards")
         assert "BCG" in result or "Marasmus" in result

@@ -148,6 +148,13 @@ CCS_RULES: dict[int, str] = {
     22: "Bigamous marriages prohibited.",
 }
 
+# Matches "cards 61 to 100", "flashcards 61-100", "card number 61 to card number 100", etc.
+# Group 1 → start number, Group 2 → end number.
+_FLASHCARD_RANGE_RE = re.compile(
+    r"(?:card|cards|flashcard|flashcards).*?(\d+)\s*(?:to|through|[–\-])\s*(?:card\s+(?:number\s+)?)?(\d+)",
+    re.IGNORECASE,
+)
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -282,6 +289,10 @@ def generate_flashcards_slice(n: int) -> str:
     -------
     str
         Formatted flashcard output ready to print or display.
+
+    See Also
+    --------
+    generate_flashcards_range : Return an arbitrary start–end slice.
     """
     flat = _all_flashcards_flat()
     total = len(flat)
@@ -291,6 +302,40 @@ def generate_flashcards_slice(n: int) -> str:
     header = f"**First {n} Flashcards** (of {total} total)\n"
     lines: list[str] = [header]
     for i, (topic_label, front, back) in enumerate(selected, start=1):
+        lines.append(f"{i:3}. [{topic_label}]  {front} | {back}")
+    return "\n".join(lines)
+
+
+def generate_flashcards_range(start: int, end: int) -> str:
+    """
+    Return flashcards numbered *start* through *end* (1-based, inclusive).
+
+    Cards are drawn in topic order: electrolytes → pharmacology →
+    fundamentals → obstetrics → paediatrics.  Each card is prefixed with
+    its sequential number and topic label.
+
+    Parameters
+    ----------
+    start : int
+        First card number to return (1-based).  Clamped to [1, total].
+    end : int
+        Last card number to return (1-based, inclusive).
+        Clamped to [start, total].
+
+    Returns
+    -------
+    str
+        Formatted flashcard output ready to print or display.
+    """
+    flat = _all_flashcards_flat()
+    total = len(flat)
+    start = max(1, min(start, total))
+    end = max(start, min(end, total))
+    selected = flat[start - 1:end]
+
+    header = f"**Flashcards {start}–{end}** (of {total} total)\n"
+    lines: list[str] = [header]
+    for i, (topic_label, front, back) in enumerate(selected, start=start):
         lines.append(f"{i:3}. [{topic_label}]  {front} | {back}")
     return "\n".join(lines)
 
@@ -429,6 +474,10 @@ class NursingAgent:
         """Return the first *n* flashcards from the full knowledge base."""
         return generate_flashcards_slice(n)
 
+    def flashcards_range(self, start: int, end: int) -> str:
+        """Return flashcards numbered *start* through *end* (1-based, inclusive)."""
+        return generate_flashcards_range(start, end)
+
     def mnemonic(self, topic: str) -> str:
         """Return a mnemonic for *topic*."""
         return get_mnemonic(topic)
@@ -489,6 +538,12 @@ class NursingAgent:
 
         # Generic keyword routing
         if any(kw in q for kw in ("flashcard", "card", "cards")):
+            # "cards 61 to 100" / "card number 61 to card number 100" / "61-100"
+            _range_match = _FLASHCARD_RANGE_RE.search(q)
+            if _range_match:
+                return self.flashcards_range(
+                    int(_range_match.group(1)), int(_range_match.group(2))
+                )
             # "first N flashcards/cards" — e.g. "first 20 flashcards"
             _slice_match = re.search(r"\bfirst\s+(\d+)\b", q)
             if _slice_match:
@@ -640,6 +695,7 @@ def _interactive(agent: NursingAgent) -> None:
             Commands:
               all flashcards                 — show every flashcard in the knowledge base
               first <N> flashcards           — show the first N flashcards (e.g. first 20 flashcards)
+              cards <X> to <Y>               — show flashcards X through Y (e.g. cards 61 to 100)
               flashcards <topic>             — generate atomic flashcards for one topic
               mnemonic <topic>               — get a mnemonic
               ccs rule <number>              — look up a CCS Conduct Rule
@@ -685,6 +741,13 @@ def main() -> None:
         help="Print the first N flashcards from the knowledge base (e.g. --first-n 20)",
     )
     parser.add_argument(
+        "--cards",
+        type=int,
+        nargs=2,
+        metavar=("START", "END"),
+        help="Print flashcards START through END (1-based, inclusive), e.g. --cards 61 100",
+    )
+    parser.add_argument(
         "--all-flashcards",
         action="store_true",
         help="Print every flashcard in the knowledge base, grouped by topic",
@@ -693,7 +756,9 @@ def main() -> None:
 
     agent = NursingAgent()
 
-    if args.first_n is not None:
+    if args.cards is not None:
+        print(agent.flashcards_range(args.cards[0], args.cards[1]))
+    elif args.first_n is not None:
         print(agent.flashcards_slice(args.first_n))
     elif args.all_flashcards:
         print(agent.all_flashcards())
