@@ -16,8 +16,9 @@ Usage
 -----
     python agent.py                  # interactive CLI
     python agent.py --demo           # run a built-in demo
-    python agent.py --demo-paediatrics   # full paediatric nursing demo
-    python agent.py --all-flashcards     # dump every flashcard in the knowledge base
+    python agent.py --demo-paediatrics          # full paediatric nursing demo
+    python agent.py --all-flashcards            # dump every flashcard in the knowledge base
+    python agent.py --first-n 20               # print the first 20 flashcards
 """
 
 from __future__ import annotations
@@ -236,6 +237,64 @@ def generate_all_flashcards() -> str:
     return header + sep + sep.join(sections)
 
 
+def _all_flashcards_flat() -> list[tuple[str, str, str]]:
+    """
+    Return every flashcard as a flat, ordered list of tuples.
+
+    Each tuple has the structure ``(topic_label, front, back)`` where:
+
+    * ``topic_label`` — title-cased topic name (e.g. ``"Electrolytes"``)
+    * ``front`` — question / term side of the card
+    * ``back`` — answer / value side of the card
+
+    The ordering follows FLASHCARD_SETS definition order (electrolytes →
+    pharmacology → fundamentals → obstetrics → paediatrics).  Within the
+    paediatrics topic, cards appear in sub-topic definition order
+    (vital signs → growth and development → immunisation → common conditions
+    → nutrition → neonatal).
+
+    This flat list is the canonical source used by :func:`generate_flashcards_slice`.
+    """
+    result: list[tuple[str, str, str]] = []
+    for topic, cards in FLASHCARD_SETS.items():
+        label = topic.title()
+        for front, back in cards:
+            result.append((label, front, back))
+    return result
+
+
+def generate_flashcards_slice(n: int) -> str:
+    """
+    Return the first *n* flashcards from the full knowledge base.
+
+    Cards are drawn in topic order: electrolytes → pharmacology →
+    fundamentals → obstetrics → paediatrics.  Each card is prefixed with
+    a sequential number and its topic label so the learner always knows
+    the context.
+
+    Parameters
+    ----------
+    n : int
+        Number of cards to return.  Clamped to the total available cards
+        when *n* exceeds the knowledge base size.
+
+    Returns
+    -------
+    str
+        Formatted flashcard output ready to print or display.
+    """
+    flat = _all_flashcards_flat()
+    total = len(flat)
+    n = max(1, min(n, total))  # Clamp n to valid range [1, total]
+    selected = flat[:n]
+
+    header = f"**First {n} Flashcards** (of {total} total)\n"
+    lines: list[str] = [header]
+    for i, (topic_label, front, back) in enumerate(selected, start=1):
+        lines.append(f"{i:3}. [{topic_label}]  {front} | {back}")
+    return "\n".join(lines)
+
+
 def get_mnemonic(topic: str) -> str:
     """Return the mnemonic for a given topic."""
     matched_key = _match_key(topic, MNEMONICS.keys())
@@ -366,6 +425,10 @@ class NursingAgent:
         """Return every flashcard in the knowledge base grouped by topic."""
         return generate_all_flashcards()
 
+    def flashcards_slice(self, n: int) -> str:
+        """Return the first *n* flashcards from the full knowledge base."""
+        return generate_flashcards_slice(n)
+
     def mnemonic(self, topic: str) -> str:
         """Return a mnemonic for *topic*."""
         return get_mnemonic(topic)
@@ -426,6 +489,10 @@ class NursingAgent:
 
         # Generic keyword routing
         if any(kw in q for kw in ("flashcard", "card", "cards")):
+            # "first N flashcards/cards" — e.g. "first 20 flashcards"
+            _slice_match = re.search(r"\bfirst\s+(\d+)\b", q)
+            if _slice_match:
+                return self.flashcards_slice(int(_slice_match.group(1)))
             # "all flashcards / show all / provide all" → dump entire knowledge base
             if any(kw in q for kw in ("all", "every", "complete", "full", "provide", "show all")):
                 return self.all_flashcards()
@@ -572,6 +639,7 @@ def _interactive(agent: NursingAgent) -> None:
             print(textwrap.dedent("""
             Commands:
               all flashcards                 — show every flashcard in the knowledge base
+              first <N> flashcards           — show the first N flashcards (e.g. first 20 flashcards)
               flashcards <topic>             — generate atomic flashcards for one topic
               mnemonic <topic>               — get a mnemonic
               ccs rule <number>              — look up a CCS Conduct Rule
@@ -611,6 +679,12 @@ def main() -> None:
         help="Run a full paediatric nursing demonstration",
     )
     parser.add_argument(
+        "--first-n",
+        type=int,
+        metavar="N",
+        help="Print the first N flashcards from the knowledge base (e.g. --first-n 20)",
+    )
+    parser.add_argument(
         "--all-flashcards",
         action="store_true",
         help="Print every flashcard in the knowledge base, grouped by topic",
@@ -619,7 +693,9 @@ def main() -> None:
 
     agent = NursingAgent()
 
-    if args.all_flashcards:
+    if args.first_n is not None:
+        print(agent.flashcards_slice(args.first_n))
+    elif args.all_flashcards:
         print(agent.all_flashcards())
     elif args.demo_paediatrics:
         _demo_paediatrics(agent)

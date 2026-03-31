@@ -12,6 +12,8 @@ from agent import (
     NursingAgent,
     generate_flashcards,
     generate_all_flashcards,
+    generate_flashcards_slice,
+    _all_flashcards_flat,
     get_mnemonic,
     ccs_rule,
     priority_question,
@@ -283,3 +285,147 @@ class TestAllFlashcards:
         assert "|" in result
         # Should NOT return paediatric cards (topic-specific, not all)
         assert "BCG" not in result
+
+
+# ---------------------------------------------------------------------------
+# Flashcard slice tests (first N)
+# ---------------------------------------------------------------------------
+
+class TestFlashcardsSlice:
+    """Tests for _all_flashcards_flat(), generate_flashcards_slice(), and NursingAgent.flashcards_slice()."""
+
+    # ------------------------------------------------------------------
+    # _all_flashcards_flat
+    # ------------------------------------------------------------------
+
+    def test_flat_list_length_matches_total(self):
+        flat = _all_flashcards_flat()
+        total = sum(len(cards) for cards in FLASHCARD_SETS.values())
+        assert len(flat) == total
+
+    def test_flat_list_entries_are_three_strings(self):
+        for topic_label, front, back in _all_flashcards_flat():
+            assert isinstance(topic_label, str) and topic_label
+            assert isinstance(front, str) and front
+            assert isinstance(back, str) and back
+
+    def test_flat_list_starts_with_electrolytes(self):
+        flat = _all_flashcards_flat()
+        assert flat[0][0] == "Electrolytes"
+        assert "Na" in flat[0][1]
+
+    def test_flat_list_contains_paediatrics(self):
+        flat = _all_flashcards_flat()
+        labels = {entry[0] for entry in flat}
+        assert "Paediatrics" in labels
+
+    # ------------------------------------------------------------------
+    # generate_flashcards_slice
+    # ------------------------------------------------------------------
+
+    def test_slice_20_returns_20_lines_of_cards(self):
+        result = generate_flashcards_slice(20)
+        # Count lines that contain " | " (actual card lines)
+        card_lines = [l for l in result.splitlines() if " | " in l]
+        assert len(card_lines) == 20
+
+    def test_slice_header_shows_n_and_total(self):
+        total = len(_all_flashcards_flat())
+        result = generate_flashcards_slice(20)
+        assert "First 20 Flashcards" in result
+        assert str(total) in result
+
+    def test_slice_20_first_card_is_sodium(self):
+        result = generate_flashcards_slice(20)
+        assert "Normal serum Na" in result
+
+    def test_slice_20_last_card_is_magnesium_sulfate_antidote(self):
+        # Card #20 in electrolytes(10) + pharmacology(10) order
+        result = generate_flashcards_slice(20)
+        assert "Magnesium sulfate" in result
+
+    def test_slice_10_contains_only_electrolytes(self):
+        result = generate_flashcards_slice(10)
+        assert "Electrolytes" in result
+        assert "Pharmacology" not in result
+
+    def test_slice_11_crosses_into_pharmacology(self):
+        result = generate_flashcards_slice(11)
+        assert "Pharmacology" in result
+
+    def test_slice_numbers_each_card(self):
+        result = generate_flashcards_slice(20)
+        assert "  1." in result
+        assert " 20." in result
+
+    def test_slice_topic_label_appears_in_brackets(self):
+        result = generate_flashcards_slice(20)
+        assert "[Electrolytes]" in result
+        assert "[Pharmacology]" in result
+
+    def test_slice_clamped_to_total(self):
+        total = len(_all_flashcards_flat())
+        result = generate_flashcards_slice(total + 1000)
+        card_lines = [l for l in result.splitlines() if " | " in l]
+        assert len(card_lines) == total
+
+    def test_slice_of_1_returns_single_card(self):
+        result = generate_flashcards_slice(1)
+        card_lines = [l for l in result.splitlines() if " | " in l]
+        assert len(card_lines) == 1
+
+    def test_slice_returns_string(self):
+        assert isinstance(generate_flashcards_slice(20), str)
+
+    # ------------------------------------------------------------------
+    # NursingAgent.flashcards_slice
+    # ------------------------------------------------------------------
+
+    def test_agent_flashcards_slice_method(self):
+        agent = NursingAgent()
+        result = agent.flashcards_slice(20)
+        assert "First 20 Flashcards" in result
+        assert "|" in result
+        assert "Normal serum Na" in result
+
+    # ------------------------------------------------------------------
+    # ask() routing — "first N flashcards/cards"
+    # ------------------------------------------------------------------
+
+    def test_ask_first_20_flashcards(self):
+        agent = NursingAgent()
+        result = agent.ask("provide me first 20 flashcards")
+        assert "First 20 Flashcards" in result
+        assert "|" in result
+
+    def test_ask_first_n_variations(self):
+        agent = NursingAgent()
+        for phrase in (
+            "first 20 flashcards",
+            "first 20 cards",
+            "give me first 20 flashcards",
+            "show first 10 cards",
+            "first 5 flashcards please",
+        ):
+            result = agent.ask(phrase)
+            assert "|" in result, f"ask('{phrase}') did not return cards"
+            assert "First" in result, f"ask('{phrase}') missing 'First N' header"
+
+    def test_ask_first_10_returns_exactly_10_cards(self):
+        agent = NursingAgent()
+        result = agent.ask("first 10 cards")
+        card_lines = [l for l in result.splitlines() if " | " in l]
+        assert len(card_lines) == 10
+
+    def test_ask_first_takes_priority_over_all(self):
+        # "first 5 all flashcards" — first-N regex should win over "all" keyword
+        agent = NursingAgent()
+        result = agent.ask("first 5 flashcards")
+        card_lines = [l for l in result.splitlines() if " | " in l]
+        assert len(card_lines) == 5
+
+    def test_ask_all_flashcards_still_works_when_no_n(self):
+        # Regression: "all flashcards" (no number) should still return full dump
+        agent = NursingAgent()
+        result = agent.ask("all flashcards")
+        assert "BCG" in result or "Marasmus" in result
