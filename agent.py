@@ -16,6 +16,8 @@ Usage
 -----
     python agent.py                  # interactive CLI
     python agent.py --demo           # run a built-in demo
+    python agent.py --demo-paediatrics   # full paediatric nursing demo
+    python agent.py --all-flashcards     # dump every flashcard in the knowledge base
 """
 
 from __future__ import annotations
@@ -197,6 +199,43 @@ def generate_flashcards(topic: str) -> str:
     return "\n".join(lines)
 
 
+def generate_all_flashcards() -> str:
+    """
+    Return every flashcard in the knowledge base, grouped by topic.
+
+    Non-paediatric topics are shown as a flat list.
+    The paediatrics topic is broken out by sub-topic for readability,
+    because it contains 70+ cards across six clinical areas.
+    """
+    sep = "\n" + "═" * 60 + "\n"
+    sections: list[str] = []
+
+    # Non-paediatric topics in definition order
+    non_paed_topics = [t for t in FLASHCARD_SETS if t != "paediatrics"]
+    for topic in non_paed_topics:
+        lines = [f"**Flashcards — {topic.title()}**\n"]
+        for front, back in FLASHCARD_SETS[topic]:
+            lines.append(f"{front} | {back}")
+        sections.append("\n".join(lines))
+
+    # Paediatrics — grouped by sub-topic
+    paed_header = "**Flashcards — Paediatrics**"
+    paed_sections: list[str] = [paed_header]
+    inner_sep = "\n" + "─" * 40 + "\n"
+    subtopic_blocks: list[str] = []
+    for subtopic, cards in _paed.FLASHCARDS.items():
+        block_lines = [f"  ► {subtopic.title()}\n"]
+        for front, back in cards:
+            block_lines.append(f"{front} | {back}")
+        subtopic_blocks.append("\n".join(block_lines))
+    paed_sections.append(inner_sep.join(subtopic_blocks))
+    sections.append("\n\n".join(paed_sections))
+
+    total = sum(len(cards) for cards in FLASHCARD_SETS.values())
+    header = f"**All Flashcards — {total} cards across {len(FLASHCARD_SETS)} topics**"
+    return header + sep + sep.join(sections)
+
+
 def get_mnemonic(topic: str) -> str:
     """Return the mnemonic for a given topic."""
     matched_key = _match_key(topic, MNEMONICS.keys())
@@ -323,6 +362,10 @@ class NursingAgent:
         """Return atomic flashcards for *topic*."""
         return generate_flashcards(topic)
 
+    def all_flashcards(self) -> str:
+        """Return every flashcard in the knowledge base grouped by topic."""
+        return generate_all_flashcards()
+
     def mnemonic(self, topic: str) -> str:
         """Return a mnemonic for *topic*."""
         return get_mnemonic(topic)
@@ -383,6 +426,9 @@ class NursingAgent:
 
         # Generic keyword routing
         if any(kw in q for kw in ("flashcard", "card", "cards")):
+            # "all flashcards / show all / provide all" → dump entire knowledge base
+            if any(kw in q for kw in ("all", "every", "complete", "full", "provide", "show all")):
+                return self.all_flashcards()
             for topic in FLASHCARD_SETS:
                 if topic in q:
                     return self.flashcards(topic)
@@ -525,7 +571,8 @@ def _interactive(agent: NursingAgent) -> None:
         if user_input.lower() == "help":
             print(textwrap.dedent("""
             Commands:
-              flashcards <topic>             — generate atomic flashcards
+              all flashcards                 — show every flashcard in the knowledge base
+              flashcards <topic>             — generate atomic flashcards for one topic
               mnemonic <topic>               — get a mnemonic
               ccs rule <number>              — look up a CCS Conduct Rule
               priority <scenario>            — NCLEX-style priority question
@@ -563,11 +610,18 @@ def main() -> None:
         action="store_true",
         help="Run a full paediatric nursing demonstration",
     )
+    parser.add_argument(
+        "--all-flashcards",
+        action="store_true",
+        help="Print every flashcard in the knowledge base, grouped by topic",
+    )
     args = parser.parse_args()
 
     agent = NursingAgent()
 
-    if args.demo_paediatrics:
+    if args.all_flashcards:
+        print(agent.all_flashcards())
+    elif args.demo_paediatrics:
         _demo_paediatrics(agent)
     elif args.demo:
         _demo(agent)

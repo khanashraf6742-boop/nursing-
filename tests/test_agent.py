@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent import (
     NursingAgent,
     generate_flashcards,
+    generate_all_flashcards,
     get_mnemonic,
     ccs_rule,
     priority_question,
@@ -199,3 +200,86 @@ class TestNursingAgent:
     def test_system_prompt_loaded(self):
         # system prompt should be a non-empty string (accessible via public property)
         assert isinstance(self.agent.system_prompt, str)
+
+
+# ---------------------------------------------------------------------------
+# All-flashcards tests
+# ---------------------------------------------------------------------------
+
+class TestAllFlashcards:
+    """Tests for generate_all_flashcards() and NursingAgent.all_flashcards()."""
+
+    def test_returns_string(self):
+        result = generate_all_flashcards()
+        assert isinstance(result, str) and result
+
+    def test_contains_every_topic(self):
+        result = generate_all_flashcards()
+        for topic in FLASHCARD_SETS:
+            assert topic.title() in result or topic in result.lower(), \
+                f"Topic '{topic}' not found in all-flashcards output"
+
+    def test_contains_all_main_topic_cards(self):
+        result = generate_all_flashcards()
+        # Spot-check one card from each non-paediatrics topic
+        assert "3.5–5.0 mEq/L" in result          # electrolytes K⁺
+        assert "Protamine sulfate" in result        # pharmacology antidote
+        assert "12–20 breaths/min" in result        # fundamentals RR
+        assert "Nagele" in result                   # obstetrics
+
+    def test_contains_paediatric_sub_topics(self):
+        result = generate_all_flashcards()
+        # Each paediatric sub-topic heading should appear
+        import paediatrics as _paed
+        for subtopic in _paed.FLASHCARDS:
+            assert subtopic.title() in result, \
+                f"Paediatric sub-topic '{subtopic}' not found in all-flashcards output"
+
+    def test_contains_paediatric_cards(self):
+        result = generate_all_flashcards()
+        assert "BCG" in result        # immunisation
+        assert "APGAR" in result      # neonatal
+        assert "Marasmus" in result   # nutrition
+
+    def test_total_card_count_in_header(self):
+        result = generate_all_flashcards()
+        total = sum(len(cards) for cards in FLASHCARD_SETS.values())
+        assert str(total) in result
+
+    def test_topic_count_in_header(self):
+        result = generate_all_flashcards()
+        assert str(len(FLASHCARD_SETS)) in result
+
+    def test_pipe_separator_used_for_cards(self):
+        result = generate_all_flashcards()
+        assert "|" in result
+
+    def test_agent_all_flashcards_method(self):
+        agent = NursingAgent()
+        result = agent.all_flashcards()
+        assert "3.5–5.0 mEq/L" in result
+        assert "BCG" in result
+        assert "|" in result
+
+    def test_ask_routes_all_flashcards_phrase(self):
+        agent = NursingAgent()
+        for phrase in (
+            "provide me all flashcards",
+            "show all cards",
+            "give me all flashcards",
+            "all flashcards please",
+            "complete flashcards",
+            "every flashcard",
+        ):
+            result = agent.ask(phrase)
+            assert "|" in result, f"ask('{phrase}') did not return flashcard output"
+            assert "BCG" in result or "3.5" in result, \
+                f"ask('{phrase}') did not return full flashcard output"
+
+    def test_ask_topic_flashcard_still_works(self):
+        agent = NursingAgent()
+        result = agent.ask("Give me flashcards for electrolytes")
+        assert "3.5–5.0 mEq/L" in result
+        assert "|" in result
+        # Should NOT return paediatric cards (topic-specific, not all)
+        assert "BCG" not in result
