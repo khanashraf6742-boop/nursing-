@@ -26,6 +26,8 @@ import textwrap
 from pathlib import Path
 from typing import Iterable
 
+import paediatrics as _paed
+
 # ---------------------------------------------------------------------------
 # Agent system prompt
 # ---------------------------------------------------------------------------
@@ -92,18 +94,7 @@ FLASHCARD_SETS: dict[str, list[tuple[str, str]]] = {
         ("Nagele's rule — EDD calculation", "LMP + 9 months + 7 days"),
         ("Maternal mortality rate (India target, NHM)", "< 70/100,000 live births"),
     ],
-    "paediatrics": [
-        ("Immunisation — BCG given at", "Birth"),
-        ("Immunisation — OPV 0 given at", "Birth"),
-        ("DPT 1 given at", "6 weeks"),
-        ("MMR given at", "9 months & 15 months"),
-        ("Birth weight doubles by", "5 months"),
-        ("Birth weight triples by", "1 year"),
-        ("Normal neonatal respiratory rate", "40–60 breaths/min"),
-        ("Anterior fontanelle closes at", "12–18 months"),
-        ("MUAC (moderate acute malnutrition)", "11.5–12.5 cm"),
-        ("WHO oral rehydration solution (ORS) — Na⁺ content", "75 mmol/L"),
-    ],
+    "paediatrics": _paed.ALL_FLASHCARDS,
 }
 
 MNEMONICS: dict[str, tuple[str, str]] = {
@@ -141,6 +132,9 @@ MNEMONICS: dict[str, tuple[str, str]] = {
     ),
 }
 
+# Merge paediatric-specific mnemonics
+MNEMONICS.update(_paed.MNEMONICS)
+
 CCS_RULES: dict[int, str] = {
     3: "General conduct — Every Government servant shall at all times maintain absolute integrity and devotion to duty.",
     7: "Prohibition on taking part in politics and elections.",
@@ -155,27 +149,31 @@ CCS_RULES: dict[int, str] = {
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _match_key(query: str, keys: Iterable[str]) -> "str | None":
+def _match_key(query: str, keys: Iterable[str]) -> str | None:
     """
     Return the best-matching key from *keys* for *query* using a
     tiered strategy: exact → prefix → whole-word substring.
+    All comparisons are case-insensitive; the original-case key is returned.
     Returns *None* when no match is found.
     """
     q = query.lower().strip()
 
-    # 1. Exact match
-    for k in keys:
-        if q == k:
+    # Materialise once so we can iterate multiple times
+    key_list = list(keys)
+
+    # 1. Exact match (case-insensitive)
+    for k in key_list:
+        if q == k.lower():
             return k
 
-    # 2. Prefix match (query starts the key, e.g. "electro" → "electrolytes")
-    for k in keys:
-        if k.startswith(q):
+    # 2. Prefix match — query starts the key (e.g. "electro" → "electrolytes")
+    for k in key_list:
+        if k.lower().startswith(q):
             return k
 
     # 3. Whole-word substring (avoids 'ric' matching 'obstetrics')
-    pattern = re.compile(r"\b" + re.escape(q) + r"\b")
-    for k in keys:
+    pattern = re.compile(r"\b" + re.escape(q) + r"\b", re.IGNORECASE)
+    for k in key_list:
         if pattern.search(k):
             return k
 
@@ -242,6 +240,53 @@ def priority_question(scenario: str) -> str:
     """).strip()
 
 
+def paediatric_scenario(scenario_id: int | None = None) -> str:
+    """
+    Return a formatted NCLEX-style paediatric scenario.
+
+    Parameters
+    ----------
+    scenario_id : int, optional
+        1-based ID of the scenario.  When *None*, all scenarios are returned.
+    """
+    if scenario_id is not None:
+        matches = [s for s in _paed.NCLEX_SCENARIOS if s["id"] == scenario_id]
+        if not matches:
+            ids = ", ".join(str(s["id"]) for s in _paed.NCLEX_SCENARIOS)
+            return f"Scenario {scenario_id} not found. Available IDs: {ids}"
+        return _paed.format_scenario(matches[0])
+    # Return all scenarios separated by a divider
+    sep = "\n" + "─" * 60 + "\n"
+    return sep.join(_paed.format_scenario(s) for s in _paed.NCLEX_SCENARIOS)
+
+
+def paediatric_dosage() -> str:
+    """Return the paediatric dosage quick-reference table."""
+    return _paed.format_dosage_table()
+
+
+def paediatric_immunisation() -> str:
+    """Return the India UIP immunisation schedule."""
+    return _paed.format_immunisation_schedule()
+
+
+def paediatric_subtopic_flashcards(subtopic: str) -> str:
+    """
+    Return flashcards for a specific paediatric sub-topic.
+
+    Sub-topics: vital signs, growth and development, immunisation,
+                common conditions, nutrition, neonatal
+    """
+    matched = _match_key(subtopic, _paed.FLASHCARDS.keys())
+    if matched is None:
+        available = ", ".join(_paed.FLASHCARDS.keys())
+        return f"Sub-topic '{subtopic}' not found. Available: {available}"
+    lines = [f"**Paediatric Flashcards — {matched.title()}**\n"]
+    for front, back in _paed.FLASHCARDS[matched]:
+        lines.append(f"{front} | {back}")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # High-level agent class
 # ---------------------------------------------------------------------------
@@ -290,6 +335,22 @@ class NursingAgent:
         """Generate an NCLEX-style priority question for *scenario*."""
         return priority_question(scenario)
 
+    def paediatric_scenario(self, scenario_id: int | None = None) -> str:
+        """Return a pre-built NCLEX paediatric scenario (or all if no ID given)."""
+        return paediatric_scenario(scenario_id)
+
+    def paediatric_dosage(self) -> str:
+        """Return the paediatric dosage quick-reference table."""
+        return paediatric_dosage()
+
+    def paediatric_immunisation(self) -> str:
+        """Return the India UIP immunisation schedule."""
+        return paediatric_immunisation()
+
+    def paediatric_subtopic(self, subtopic: str) -> str:
+        """Return flashcards for a specific paediatric sub-topic."""
+        return paediatric_subtopic_flashcards(subtopic)
+
     def ask(self, question: str) -> str:
         """
         Answer an open-ended question.
@@ -302,7 +363,25 @@ class NursingAgent:
 
         q = question.lower()
 
-        # Keyword routing
+        # Paediatric-specific routing (checked before generic flashcard routing)
+        is_paed = any(kw in q for kw in ("paed", "pedia", "child", "neonat", "infant", "toddler"))
+
+        if is_paed and "scenario" in q:
+            return self.paediatric_scenario()
+
+        if is_paed and ("dose" in q or "dosage" in q or "drug" in q):
+            return self.paediatric_dosage()
+
+        if is_paed and ("immun" in q or "vaccine" in q or "vaccinat" in q):
+            return self.paediatric_immunisation()
+
+        if is_paed and ("mnemonic" in q):
+            for topic in _paed.MNEMONICS:
+                if any(word in topic for word in q.split()):
+                    return self.mnemonic(topic)
+            return self.mnemonic("apgar score")
+
+        # Generic keyword routing
         if any(kw in q for kw in ("flashcard", "card", "cards")):
             for topic in FLASHCARD_SETS:
                 if topic in q:
@@ -327,8 +406,9 @@ class NursingAgent:
         return (
             "**Tip:** I'm running in offline mode.\n"
             "Connect an LLM client for full Q&A support.\n\n"
-            "Try commands: `flashcards electrolytes`, `mnemonic pulmonary edema`, "
-            "`ccs rule 3`, or `priority <scenario>`."
+            "Try commands: `flashcards paediatrics`, `paediatric scenario 1`, "
+            "`paediatric dosage`, `paediatric immunisation`, "
+            "`mnemonic apgar score`, `ccs rule 3`, or `priority <scenario>`."
         )
 
 
@@ -370,6 +450,61 @@ def _demo(agent: NursingAgent) -> None:
     print(separator)
 
 
+def _demo_paediatrics(agent: NursingAgent) -> None:
+    """Print a full paediatric nursing demo."""
+    separator = "\n" + "─" * 60 + "\n"
+
+    print(separator)
+    print("PAEDIATRIC DEMO 1 — Vital Signs by Age (Flashcards)")
+    print(separator)
+    print(agent.paediatric_subtopic("vital signs"))
+
+    print(separator)
+    print("PAEDIATRIC DEMO 2 — Growth & Development Milestones")
+    print(separator)
+    print(agent.paediatric_subtopic("growth and development"))
+
+    print(separator)
+    print("PAEDIATRIC DEMO 3 — India UIP Immunisation Schedule")
+    print(separator)
+    print(agent.paediatric_immunisation())
+
+    print(separator)
+    print("PAEDIATRIC DEMO 4 — Common Conditions Flashcards")
+    print(separator)
+    print(agent.paediatric_subtopic("common conditions"))
+
+    print(separator)
+    print("PAEDIATRIC DEMO 5 — Nutrition & Malnutrition Flashcards")
+    print(separator)
+    print(agent.paediatric_subtopic("nutrition"))
+
+    print(separator)
+    print("PAEDIATRIC DEMO 6 — Neonatal Nursing Flashcards")
+    print(separator)
+    print(agent.paediatric_subtopic("neonatal"))
+
+    print(separator)
+    print("PAEDIATRIC DEMO 7 — Mnemonics")
+    print(separator)
+    for topic in ("apgar score", "kawasaki disease", "dehydration signs in children",
+                  "febrile seizure management", "nephrotic syndrome", "epiglottitis 4Ds"):
+        print(agent.mnemonic(topic))
+        print()
+
+    print(separator)
+    print("PAEDIATRIC DEMO 8 — Paediatric Dosage Quick Reference")
+    print(separator)
+    print(agent.paediatric_dosage())
+
+    print(separator)
+    print("PAEDIATRIC DEMO 9 — NCLEX Priority Scenarios (3 of 8)")
+    print(separator)
+    for sid in (1, 3, 5):
+        print(agent.paediatric_scenario(sid))
+        print(separator)
+
+
 def _interactive(agent: NursingAgent) -> None:
     """Run an interactive CLI session."""
     print("Nursing Officer Exam Agent — Interactive Mode")
@@ -390,16 +525,23 @@ def _interactive(agent: NursingAgent) -> None:
         if user_input.lower() == "help":
             print(textwrap.dedent("""
             Commands:
-              flashcards <topic>       — generate atomic flashcards
-              mnemonic <topic>         — get a mnemonic
-              ccs rule <number>        — look up a CCS Conduct Rule
-              priority <scenario>      — NCLEX-style priority question
-              <any question>           — open-ended Q&A (requires LLM)
+              flashcards <topic>             — generate atomic flashcards
+              mnemonic <topic>               — get a mnemonic
+              ccs rule <number>              — look up a CCS Conduct Rule
+              priority <scenario>            — NCLEX-style priority question
+              paediatric scenario [<id>]     — NCLEX paediatric scenario (1–8)
+              paediatric dosage              — paediatric drug dosage reference
+              paediatric immunisation        — India UIP schedule
+              paediatric subtopic <subtopic> — focused paediatric flashcards
+              <any question>                 — open-ended Q&A (requires LLM)
 
-            Topics for flashcards: electrolytes, pharmacology, fundamentals, obstetrics, paediatrics
-            Topics for mnemonics: pulmonary edema, heart failure, hypokalemia signs,
-                                  hyperkalemia signs, cushing's triad, cranial nerves,
-                                  apgar score, myocardial infarction signs
+            Flashcard topics: electrolytes, pharmacology, fundamentals, obstetrics, paediatrics
+            Paediatric sub-topics: vital signs, growth and development, immunisation,
+                                   common conditions, nutrition, neonatal
+            Mnemonics (paediatric): apgar score, kawasaki disease, dehydration signs in children,
+                                    febrile seizure management, meningitis signs, rickets signs,
+                                    nephrotic syndrome, epiglottitis 4Ds, neonatal resuscitation steps,
+                                    kwashiorkor vs marasmus
             """))
             continue
 
@@ -416,11 +558,18 @@ def main() -> None:
         action="store_true",
         help="Run a built-in demonstration of agent capabilities",
     )
+    parser.add_argument(
+        "--demo-paediatrics",
+        action="store_true",
+        help="Run a full paediatric nursing demonstration",
+    )
     args = parser.parse_args()
 
     agent = NursingAgent()
 
-    if args.demo:
+    if args.demo_paediatrics:
+        _demo_paediatrics(agent)
+    elif args.demo:
         _demo(agent)
     else:
         _interactive(agent)
